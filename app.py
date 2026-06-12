@@ -26,6 +26,7 @@ import yfinance as yf
 # Project imports
 from tools.scanner_sean_trades import run_scan
 from tools.technical_analysis import SetupScore
+from tools.finviz_sectors import get_all_sectors_ranked, WEIGHTS
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -57,6 +58,12 @@ def run_full_scan(min_grade: str):
         })
     df = pd.DataFrame(rows)
     return df, scan
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_all_sectors():
+    """All sectors with the full Relative Strength breakdown. Cached 1h."""
+    return get_all_sectors_ranked()
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -141,6 +148,46 @@ with tab_overview:
     if not market_bull:
         st.warning("Il mercato non è in chiaro uptrend (SPY/QQQ). "
                    "Il metodo di Sean consiglia cautela: solo setup A+ e size ridotta.")
+
+    st.divider()
+    st.subheader("📊 Relative Strength — tutti i settori")
+
+    w1, w2, w3 = int(WEIGHTS["1w"] * 100), int(WEIGHTS["1m"] * 100), int(WEIGHTS["3m"] * 100)
+    st.markdown(
+        f"""
+**Legenda — come calcolo il punteggio (Relative Strength score):**
+
+> `score = (perf_1settimana × {w1}%) + (perf_1mese × {w2}%) + (perf_3mesi × {w3}%)`
+
+- **1 settimana → {w1}%** — peso maggiore al momentum recente (dove ruotano i soldi *ora*)
+- **1 mese → {w2}%** — conferma che la forza dura, non è un rimbalzo di un giorno
+- **3 mesi → {w3}%** — contesto di fondo, filtra i falsi leader
+
+I 3 settori col punteggio più alto entrano nell'imbuto qui sotto.
+"""
+    )
+
+    sectors_all = load_all_sectors()
+    if sectors_all:
+        sec_df = pd.DataFrame(sectors_all)
+        sec_df = sec_df.rename(columns={
+            "sector": "Settore", "perf_1d": "1 giorno", "perf_1w": "1 settimana",
+            "perf_1m": "1 mese", "perf_3m": "3 mesi", "score": "Score",
+        })
+        top3 = set(s["sector"] for s in sectors[:3])
+
+        def highlight_top(row):
+            is_top = row["Settore"] in top3
+            return ["background-color: #e8f5e9; font-weight: bold" if is_top else ""
+                    for _ in row]
+
+        styled = (sec_df.style
+                  .apply(highlight_top, axis=1)
+                  .format({"1 giorno": "{:+.2%}", "1 settimana": "{:+.2%}",
+                           "1 mese": "{:+.2%}", "3 mesi": "{:+.2%}", "Score": "{:+.4f}"}))
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+        st.caption("🟩 = settori selezionati (top 3) che alimentano l'imbuto. "
+                   "Ordinati per Score decrescente.")
 
     st.divider()
     st.subheader("🔻 Imbuto: Settore → Industria → Leaders")

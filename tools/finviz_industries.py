@@ -24,11 +24,16 @@ def get_industry_scores() -> dict[str, float]:
     if df is None or df.empty:
         return {}
 
-    # Parse percentage / numeric columns
-    for col in ["Perf Week", "Perf Month", "Perf Quart"]:
+    # Normalize to consistent decimal scale (Perf Week comes as '2.93%' string,
+    # Perf Month/Quart as decimals). See finviz_sectors._normalize_perf_columns.
+    if "Perf Week" in df.columns:
+        s = df["Perf Week"].astype(str).str.replace("%", "").str.strip()
+        df["Perf Week"] = pd.to_numeric(s, errors="coerce") / 100.0
+    for col in ["Perf Month", "Perf Quart"]:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace("%", "").str.strip()
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            s = df[col].astype(str).str.replace("%", "").str.strip()
+            v = pd.to_numeric(s, errors="coerce")
+            df[col] = v.where(v.abs() <= 1.5, v / 100.0)
 
     df["score"] = (
         df.get("Perf Week", pd.Series(0, index=df.index)).fillna(0) * 0.40 +
