@@ -38,41 +38,31 @@
 
 ---
 
-## 2. EP1 — Trovare i setup (imbuto a 3 livelli)
+## 2. EP1 — Selezione del titolo su cui operare
 
-### Livello 1 — Settore
-- Strumento: **Finviz → Groups** (https://finviz.com/groups.ashx)
-- Guardare performance **1 giorno + 1 settimana + 1 mese** (+ contesto 3 mesi)
-- Cercare il settore che guida su **tutti** gli orizzonti = forza reale
-- Temi/narrative contano: AI, aerospazio, quantum, robotaxi, semiconduttori
+### Criteri di screening (filtri Finviz Screener)
+Il titolo deve passare questi filtri base:
+| Filtro | Valore | Motivo |
+|---|---|---|
+| Market Cap | > $2B | No micro-cap |
+| Price | > $3 | No penny stock |
+| Avg Volume | > 500K | Liquidità sufficiente |
+| Relative Volume | > 1 | Attività inusuale / interesse |
+| Country | USA | Solo titoli USA |
 
-### Livello 2 — Industria (sotto-settore)
-- Finviz → Groups → menu **"Industry"** (~145 industrie) oppure "Sector+Industry"
-- TradingView → Markets → Stocks → Sectors and Industries
-- Dentro il settore-leader, isolare l'**industria** che guida (es. Semiconductors dentro Tech)
+- Ordinare i risultati per **volume / relative volume** → i nomi più liquidi e attivi
+- Verificare poi il setup su TradingView
 
-### Livello 3 — Leader (titoli)
-- Screener Finviz con questi filtri:
-  | Filtro | Valore | Motivo |
-  |---|---|---|
-  | Market Cap | > $2B | No micro-cap |
-  | Price | > $3 | No penny stock |
-  | Avg Volume | > 500K | Liquidità |
-  | Relative Volume | > 1 | Attività inusuale |
-- Ordinare per **volume / relative volume** → i nomi più liquidi e attivi
-- Verificare il setup su TradingView
+### Caratteristiche del titolo "giusto"
+- **Leader / true market leader:** sta facendo **nuovi massimi**, non vicino ai minimi a 52 settimane
+  (meno resistenza sopra, tutti vogliono entrarci, ha una narrativa che lo spinge).
+- **Tema / narrativa forte:** innovazione USA — AI, semiconduttori, aerospazio, quantum, robotaxi.
+- **Trend pulito:** sopra le EMA, non choppy sotto le medie.
+- **In compressione:** base stretta sul daily pronta a esplodere (vedi §3-§6).
+- **Catalizzatori:** earnings forti del comparto possono prolungare il movimento.
 
-### Formula composita usata nello scanner (replica del giudizio di Sean)
-```
-RelativeStrength_score = perf_1settimana × 0.40
-                       + perf_1mese      × 0.35
-                       + perf_3mesi      × 0.25
-```
-- 1 sett (40%): momentum recente — dove ruotano i soldi ORA
-- 1 mese (35%): la forza dura, non è rimbalzo di un giorno
-- 3 mesi (25%): contesto di fondo, filtra i falsi leader
-- **Nota dati Finviz:** "Perf Week" arriva come stringa `%` (es. `2.93%`),
-  "Perf Month/Quart" come decimali (`0.0152`) → normalizzare alla stessa scala (÷100 la settimana).
+> Logica di Sean: restringere ai nomi più forti che guidano, con tema e momentum, alta liquidità,
+> e un setup tecnico in compressione sul daily.
 
 ---
 
@@ -210,18 +200,11 @@ Esempio: ADR 5%, se il prezzo è >10% sopra l'EMA8 daily → skip. Più vicino a
    bullish = SPY.close > SPY.EMA21  AND  QQQ.close > QQQ.EMA21
    se non bullish → solo setup A+, size ridotta
 
-2. SECTOR (Finviz Groups, group=Sector)
-   per ogni settore: score = perfW*0.40 + perfM*0.35 + perfQ*0.25   (scala decimale!)
-   top_sectors = top 3 per score
-
-3. INDUSTRY (Finviz Groups, group=Industry)
-   per ogni top_sector: rank industrie presenti con stessa formula
-   top_industries = top 3 per settore
-
-4. SCREEN (Finviz Screener) — solo titoli nelle top_industries
+2. SCREEN (Finviz Screener) — universo dei titoli candidati
    filtri: mktcap>2B, price>3, avgvol>500K, relvol>1, USA
+   ordinare per relative volume
 
-5. TECHNICAL SCORE (daily, ~6 mesi OHLCV) — totale 16 punti
+3. TECHNICAL SCORE (daily, ~6 mesi OHLCV) — totale 16 punti
    - market trend            (0-2)
    - EMA stack 8/21/50        (0-3)  +1 per EMA sopra cui sta il prezzo
    - compressione            (0-3)  ATR5/ATR20 basso + range 10gg stretto
@@ -230,10 +213,10 @@ Esempio: ADR 5%, se il prezzo è >10% sopra l'EMA8 daily → skip. Più vicino a
    - vicinanza breakout      (0-2)  entro 2% del max 10gg o break del max ieri
    grade: A+ ≥85%, A ≥70%, B ≥55%, C ≥40%
 
-6. FILTRO ANTI-CHASING (opzionale, da EP3)
+4. FILTRO ANTI-CHASING (opzionale, da EP3)
    escludi se distanza(price, EMA8) > 2 × ADR
 
-7. OUTPUT: ranking per score, raggruppato per settore/industria
+5. OUTPUT: ranking per score
 ```
 
 ---
@@ -242,10 +225,10 @@ Esempio: ADR 5%, se il prezzo è >10% sopra l'EMA8 daily → skip. Più vicino a
 
 | Parametro | Default | Dove |
 |---|---|---|
-| Pesi RS score | 40/35/25 (1w/1m/3m) | `finviz_sectors.WEIGHTS` |
-| Settori top | 3 | scanner |
-| Industrie per settore | 3 | `TOP_INDUSTRIES_PER_SECTOR` |
-| Titoli per industria | 25 | `MAX_PER_INDUSTRY` |
+| Market Cap minima | $2B | filtro screener |
+| Prezzo minimo | $3 | filtro screener |
+| Avg Volume minimo | 500K | filtro screener |
+| Relative Volume minimo | 1 | filtro screener |
 | EMA | 8, 21, 50 | `technical_analysis` |
 | Grade minimo report | B | `MIN_GRADE` |
 | Rischio max/trade | 5% | regola EP3 (non automatizzata) |
