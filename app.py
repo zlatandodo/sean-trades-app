@@ -18,6 +18,7 @@ import glob
 from datetime import datetime
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -27,6 +28,7 @@ import yfinance as yf
 from tools.scanner_sean_trades import run_scan
 from tools.technical_analysis import SetupScore
 from tools.finviz_sectors import get_all_sectors_ranked, WEIGHTS
+from tools.stock_screener import build_filters, FILTER_OPTIONS
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -43,9 +45,17 @@ GRADE_COLORS = {"A+": "#0a7d2e", "A": "#1a9e4b", "B": "#c98a00", "C": "#888", "F
 
 # ── Data helpers ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
-def run_full_scan(min_grade: str):
-    """Run the scanner and return results as a DataFrame + metadata. Cached 1h."""
-    scan = run_scan(min_grade=min_grade)
+def run_full_scan(min_grade: str, weights_key: tuple, top_n: int,
+                  max_per_sector: int, filters_key: tuple):
+    """
+    Run the scanner and return results as a DataFrame + metadata. Cached 1h.
+    weights_key / filters_key are hashable tuples so the cache reflects params.
+    """
+    weights = dict(weights_key)
+    mc, pr, av, rv = filters_key
+    base_filters = build_filters(mc, pr, av, rv)
+    scan = run_scan(min_grade=min_grade, weights=weights, top_n_sectors=top_n,
+                    max_per_sector=max_per_sector, base_filters=base_filters)
     rows = []
     for r in scan["results"]:
         rows.append({
@@ -61,9 +71,9 @@ def run_full_scan(min_grade: str):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_all_sectors():
+def load_all_sectors(weights_key: tuple):
     """All sectors with the full Relative Strength breakdown. Cached 1h."""
-    return get_all_sectors_ranked()
+    return get_all_sectors_ranked(dict(weights_key))
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -79,6 +89,42 @@ def load_chart_data(ticker: str):
         data[f"EMA{span}"] = data["Close"].ewm(span=span, adjust=False).mean()
     data["VolMA20"] = data["Volume"].rolling(20).mean()
     return data
+
+
+def tradingview_widget_html(ticker: str, height: int = 360) -> str:
+    """
+    Return an embeddable TradingView Advanced Chart widget for a ticker.
+    Daily timeframe, EMA 8/21/50 overlays, volume — TradingView-plugin style
+    (like asklivermore.com). Renders as a self-contained iframe.
+    """
+    container_id = f"tv_{ticker.replace('.', '_').replace('-', '_')}"
+    return f"""
+    <div class="tradingview-widget-container" style="height:{height}px">
+      <div id="{container_id}" style="height:{height}px"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+      new TradingView.widget({{
+        "autosize": true,
+        "symbol": "{ticker}",
+        "interval": "D",
+        "timezone": "Etc/UTC",
+        "theme": "light",
+        "style": "1",
+        "locale": "it",
+        "hide_top_toolbar": true,
+        "hide_legend": false,
+        "allow_symbol_change": false,
+        "save_image": false,
+        "studies": [
+          {{"id": "MASimple@tv-basicstudies", "inputs": {{"length": 8}}}},
+          {{"id": "MASimple@tv-basicstudies", "inputs": {{"length": 21}}}},
+          {{"id": "MASimple@tv-basicstudies", "inputs": {{"length": 50}}}}
+        ],
+        "container_id": "{container_id}"
+      }});
+      </script>
+    </div>
+    """
 
 
 def list_history_files():
@@ -101,16 +147,40 @@ min_grade = st.sidebar.selectbox(
     help="Soglia minima di qualità del setup da mostrare",
 )
 
+# ── Relative Strength weights (incl. 1-day) ──
+with st.sidebar.expander("⚖️ Pesi Relative Strength", expanded=False):
+    st.caption("Pesi per il punteggio dei settori. Ideale che sommino a 100%.")
+    w1d = st.slider("1 giorno", 0, 100, int(WEIGHTS["1d"] * 100), 5) / 100
+    w1w = st.slider("1 settimana", 0, 100, int(WEIGHTS["1w"] * 100), 5) / 100
+    w1m = st.slider("1 mese", 0, 100, int(WEIGHTS["1m"] * 100), 5) / 100
+    w3m = st.slider("3 mesi", 0, 100, int(WEIGHTS["3m"] * 100), 5) / 100
+    tot = w1d + w1w + w1m + w3m
+    if abs(tot - 1.0) > 0.001:
+        st.warning(f"Somma pesi: {tot:.0%} (consigliato 100%)")
+    else:
+        st.success(f"Somma pesi: {tot:.0%}")
+weights = {"1d": w1d, "1w": w1w, "1m": w1m, "3m": w3m}
+
+# ── Universe / Level-1 filters ──
+with st.sidebar.expander("🔧 Filtri universo (Livello 1)", expanded=False):
+    top_n = st.slider("Numero settori leader", 1, 6, 3,
+                      help="Quanti settori top usare come universo")
+    max_per_sector = st.slider("Titoli max per settore", 10, 100, 60, 10)
+    mc = st.selectbox("Market Cap minima", FILTER_OPTIONS["Market Cap."], index=1)
+    pr = st.selectbox("Prezzo minimo", FILTER_OPTIONS["Price"], index=2)
+    av = st.selectbox("Volume medio minimo", FILTER_OPTIONS["Average Volume"], index=2)
+    rv = st.selectbox("Relative Volume minimo", FILTER_OPTIONS["Relative Volume"], index=2)
+
 if st.sidebar.button("🔄 Esegui nuovo scan", type="primary", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
 st.sidebar.divider()
 st.sidebar.markdown(
-    "**Imbuto a 3 livelli:**\n\n"
-    "1. Settore (top 3 momentum)\n"
-    "2. Industria (top 3 nel settore)\n"
-    "3. Leaders (titoli filtrati)\n\n"
+    "**Selezione titoli:**\n\n"
+    "1. Settori leader (per Relative Strength)\n"
+    "2. Titoli del settore (filtri universo)\n"
+    "3. Scoring tecnico /16\n\n"
     "**Scoring /16:** trend mercato · EMA stack · "
     "compressione · volume pattern · candele · breakout"
 )
@@ -120,8 +190,10 @@ st.sidebar.caption("⚠️ Non è un consiglio finanziario. "
 
 
 # ── Run scan (cached) ────────────────────────────────────────────────────────
-with st.spinner("🔬 Scansione del mercato in corso (settori → industrie → titoli)..."):
-    df, scan = run_full_scan(min_grade)
+weights_key = tuple(sorted(weights.items()))
+filters_key = (mc, pr, av, rv)
+with st.spinner("🔬 Scansione del mercato in corso (settori → titoli → scoring)..."):
+    df, scan = run_full_scan(min_grade, weights_key, top_n, max_per_sector, filters_key)
 
 market_bull = scan["market_bull"]
 sectors = scan["sectors"]
@@ -152,32 +224,34 @@ with tab_overview:
     st.divider()
     st.subheader("📊 Relative Strength — tutti i settori")
 
-    w1, w2, w3 = int(WEIGHTS["1w"] * 100), int(WEIGHTS["1m"] * 100), int(WEIGHTS["3m"] * 100)
+    p1d, p1w, p1m, p3m = (int(weights["1d"] * 100), int(weights["1w"] * 100),
+                          int(weights["1m"] * 100), int(weights["3m"] * 100))
     st.markdown(
         f"""
 **Legenda — come calcolo il punteggio (Relative Strength score):**
 
-> `score = (perf_1settimana × {w1}%) + (perf_1mese × {w2}%) + (perf_3mesi × {w3}%)`
+> `score = (perf_1giorno × {p1d}%) + (perf_1settimana × {p1w}%) + (perf_1mese × {p1m}%) + (perf_3mesi × {p3m}%)`
 
-- **1 settimana → {w1}%** — peso maggiore al momentum recente (dove ruotano i soldi *ora*)
-- **1 mese → {w2}%** — conferma che la forza dura, non è un rimbalzo di un giorno
-- **3 mesi → {w3}%** — contesto di fondo, filtra i falsi leader
+- **1 giorno → {p1d}%** — scatto odierno (dove ruotano i soldi proprio oggi)
+- **1 settimana → {p1w}%** — momentum recente
+- **1 mese → {p1m}%** — conferma che la forza dura, non è un rimbalzo di un giorno
+- **3 mesi → {p3m}%** — contesto di fondo, filtra i falsi leader
 
-I 3 settori col punteggio più alto entrano nell'imbuto qui sotto.
+I pesi sono modificabili dalla sidebar (⚖️). I top **{top_n}** settori alimentano la selezione titoli.
 """
     )
 
-    sectors_all = load_all_sectors()
+    sectors_all = load_all_sectors(weights_key)
     if sectors_all:
         sec_df = pd.DataFrame(sectors_all)
         sec_df = sec_df.rename(columns={
             "sector": "Settore", "perf_1d": "1 giorno", "perf_1w": "1 settimana",
             "perf_1m": "1 mese", "perf_3m": "3 mesi", "score": "Score",
         })
-        top3 = set(s["sector"] for s in sectors[:3])
+        top_sel = set(s["sector"] for s in sectors)
 
         def highlight_top(row):
-            is_top = row["Settore"] in top3
+            is_top = row["Settore"] in top_sel
             return ["background-color: #e8f5e9; font-weight: bold" if is_top else ""
                     for _ in row]
 
@@ -186,28 +260,26 @@ I 3 settori col punteggio più alto entrano nell'imbuto qui sotto.
                   .format({"1 giorno": "{:+.2%}", "1 settimana": "{:+.2%}",
                            "1 mese": "{:+.2%}", "3 mesi": "{:+.2%}", "Score": "{:+.4f}"}))
         st.dataframe(styled, use_container_width=True, hide_index=True)
-        st.caption("🟩 = settori selezionati (top 3) che alimentano l'imbuto. "
+        st.caption(f"🟩 = top {top_n} settori selezionati che alimentano la selezione titoli. "
                    "Ordinati per Score decrescente.")
 
     st.divider()
-    st.subheader("🔻 Imbuto: Settore → Industria → Leaders")
+    st.subheader("🎯 Titoli per settore leader")
 
     if funnel:
         for f in funnel:
             sec_score = next((s["score"] for s in sectors if s["sector"] == f["sector"]), 0)
-            with st.expander(f"**{f['sector']}**  (score {sec_score:+.2f}) — {f['n_tickers']} titoli", expanded=True):
-                ind_cols = st.columns(len(f["top_industries"]) or 1)
-                for col, ti in zip(ind_cols, f["top_industries"]):
-                    col.metric(ti["industry"], f"{ti['score']:+.2f}")
-                # Tickers in this sector
-                sec_df = df[df["Sector"] == f["sector"]]
+            sec_df = df[df["Sector"] == f["sector"]]
+            with st.expander(f"**{f['sector']}**  (score {sec_score:+.2f}) — {len(sec_df)} setup", expanded=True):
                 if not sec_df.empty:
                     chips = "  ".join(
                         f"`{row.Ticker}` {row.Grade}" for row in sec_df.itertuples()
                     )
                     st.markdown(chips)
+                else:
+                    st.caption("Nessun setup di questo settore ha passato il grado minimo.")
     else:
-        st.info("Dati funnel non disponibili in questo scan.")
+        st.info("Dati settori non disponibili in questo scan.")
 
 # ── TAB 2: Setups ────────────────────────────────────────────────────────────
 with tab_setups:
@@ -247,6 +319,29 @@ with tab_setups:
         csv = view.to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Scarica CSV", csv,
                            f"scan_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv")
+
+        # ── Inline TradingView charts (at-a-glance grid, asklivermore style) ──
+        st.divider()
+        gc1, gc2 = st.columns([3, 1])
+        gc1.subheader("📊 Grafici TradingView")
+        cols_per_row = gc2.selectbox("Colonne", [1, 2, 3], index=1,
+                                     help="Quanti grafici per riga")
+        show_charts = st.checkbox("Mostra grafici inline", value=True)
+
+        if show_charts and not view.empty:
+            chart_h = 380 if cols_per_row == 1 else (340 if cols_per_row == 2 else 300)
+            tickers_to_show = view["Ticker"].tolist()
+            for i in range(0, len(tickers_to_show), cols_per_row):
+                row_tickers = tickers_to_show[i:i + cols_per_row]
+                cols = st.columns(cols_per_row)
+                for col, tk in zip(cols, row_tickers):
+                    r = view[view["Ticker"] == tk].iloc[0]
+                    with col:
+                        st.markdown(f"**{tk}** · {r['Grade']} · {r['Score']}/16 · "
+                                    f"${r['Price']:.2f}" +
+                                    ("  ⚡" if r["NearBreakout"] else ""))
+                        components.html(tradingview_widget_html(tk, chart_h),
+                                        height=chart_h + 10)
 
 # ── TAB 3: Chart ─────────────────────────────────────────────────────────────
 with tab_chart:

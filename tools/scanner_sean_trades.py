@@ -33,9 +33,8 @@ import yfinance as yf
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.finviz_sectors import get_top_sectors
-from tools.finviz_industries import get_industry_scores
 from tools.stock_screener import (
-    get_all_candidate_tickers, get_tickers_3level_funnel, get_ticker_info
+    get_all_candidate_tickers, get_tickers_from_leading_sectors, get_ticker_info
 )
 from tools.technical_analysis import analyze_stock, get_market_trend, SetupScore
 
@@ -43,8 +42,7 @@ from tools.technical_analysis import analyze_stock, get_market_trend, SetupScore
 MIN_GRADE = "B"          # Minimum grade to include in report
 MAX_WORKERS = 8          # Parallel analysis threads
 MAX_TICKERS = 150        # Max tickers to analyze (perf cap)
-TOP_INDUSTRIES_PER_SECTOR = 3   # Leading industries to keep per sector (funnel)
-MAX_PER_INDUSTRY = 25    # Cap stocks per industry
+MAX_PER_SECTOR = 60      # Cap stocks pulled per leading sector
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".tmp")
 GRADE_ORDER = {"A+": 0, "A": 1, "B": 2, "C": 3, "F": 4}
 MIN_SCORE_THRESHOLD = {"A+": 13.6, "A": 11.2, "B": 8.8, "C": 6.4, "F": 0}
@@ -72,44 +70,37 @@ def get_market_context() -> tuple[bool, float]:
         return True, 1.0
 
 
-def get_candidate_tickers_from_finviz(top_sectors: list[dict]) -> tuple[list[str], list[dict]]:
+def get_candidate_tickers_from_finviz(top_sectors: list[dict], max_per_sector: int = None,
+                                      base_filters: dict = None) -> tuple[list[str], list[dict]]:
     """
-    3-level funnel (Sean Trades method): Sector -> Industry -> Leaders.
-    1. Top sectors (passed in)
-    2. Top industries within each sector (by momentum score)
-    3. Stocks from those leading industries only
+    2-level selection (Sean Trades method): Sector -> Leaders.
+    Pulls ALL stocks (matching base criteria) from the leading sectors, WITHOUT
+    narrowing to top industries — the industry funnel was too restrictive.
 
-    Returns (tickers, funnel_detail). Falls back to broad screen / curated
+    Returns (tickers, sector_detail). Falls back to broad screen / curated
     universe if Finviz returns nothing.
     """
-    print("🔍 Building 3-level funnel (Sector → Industry → Leaders)...")
+    print("🔍 Selecting candidates from leading sectors...")
+    cap = max_per_sector or MAX_PER_SECTOR
 
     sector_names = [s["sector"] for s in top_sectors if s.get("score", 0) > 0]
     if not sector_names:
         print("   [WARN] No leading sectors - falling back to broad screen")
         return get_all_candidate_tickers(max_tickers=MAX_TICKERS), []
 
-    # Fetch global industry momentum scores
-    print("   Fetching industry momentum scores...")
-    industry_scores = get_industry_scores()
-    if not industry_scores:
-        print("   [WARN] Industry scores unavailable - using sector-only screen")
+    tickers = get_tickers_from_leading_sectors(sector_names, max_per_sector=cap,
+                                               base_filters=base_filters)
 
-    tickers, funnel = get_tickers_3level_funnel(
-        sector_names,
-        industry_scores,
-        top_industries_per_sector=TOP_INDUSTRIES_PER_SECTOR,
-        max_per_industry=MAX_PER_INDUSTRY,
-    )
+    # Build per-sector detail for the report (counts only, no industry funnel)
+    sector_detail = []
+    for name in sector_names:
+        n = sum(1 for t in tickers if get_ticker_info(t)["sector"] == name)
+        sector_detail.append({"sector": name, "n_tickers": n})
+        print(f"   {name}: {n} stocks")
 
-    # Print the funnel
-    for f in funnel:
-        inds = ", ".join(f"{ti['industry']}({ti['score']:+.2f})" for ti in f["top_industries"])
-        print(f"   {f['sector']} → {inds} [{f['n_tickers']} stocks]")
-
-    # Fallback if funnel too thin
-    if len(tickers) < 15:
-        print(f"   Funnel returned only {len(tickers)} - supplementing with broad screen")
+    # Supplement with broad screen if too thin
+    if len(tickers) < 20:
+        print(f"   Only {len(tickers)} from sectors - supplementing with broad screen")
         broad = get_all_candidate_tickers(max_tickers=MAX_TICKERS)
         seen = set(tickers)
         for t in broad:
@@ -121,7 +112,7 @@ def get_candidate_tickers_from_finviz(top_sectors: list[dict]) -> tuple[list[str
         print("   [WARN] Finviz returned nothing - using fallback universe")
         return get_fallback_universe(), []
 
-    return tickers[:MAX_TICKERS], funnel
+    return tickers[:MAX_TICKERS], sector_detail
 
 
 def get_fallback_universe() -> list[str]:
@@ -242,13 +233,11 @@ def print_report(results: list[SetupScore], sectors: list[dict], market_bull: bo
     market_str = "✅ BULLISH (SPY/QQQ above EMA)" if market_bull else "⚠️  BEARISH/NEUTRAL"
     print(f"\n📈 Market Context: {market_str}")
 
-    # 3-level funnel
+    # Candidate pool per sector
     if funnel:
-        print(f"\n🔻 Funnel (Sector → Industry → Leaders):")
+        print(f"\n🔻 Candidates per leading sector:")
         for f in funnel:
-            inds = ", ".join(f"{ti['industry']}({ti['score']:+.2f})"
-                             for ti in f["top_industries"])
-            print(f"   {f['sector']}: {inds}")
+            print(f"   {f['sector']}: {f['n_tickers']} stocks")
 
     # Sectors
     if sectors:
@@ -301,10 +290,18 @@ def print_report(results: list[SetupScore], sectors: list[dict], market_bull: bo
     print("\n" + "=" * 70)
 
 
-def run_scan(min_grade: str = None) -> dict:
+def run_scan(min_grade: str = None, weights: dict = None, top_n_sectors: int = 3,
+             max_per_sector: int = None, base_filters: dict = None) -> dict:
     """
     Programmatic scan entry point (used by the Streamlit dashboard).
     Returns a structured dict instead of only printing.
+
+    Args:
+        min_grade: minimum grade to keep (A+/A/B/C)
+        weights: RS score weights dict {'1d','1w','1m','3m'}
+        top_n_sectors: how many leading sectors to use
+        max_per_sector: cap stocks pulled per sector
+        base_filters: Finviz filter dict (from stock_screener.build_filters)
 
     Returns:
         {
@@ -320,8 +317,9 @@ def run_scan(min_grade: str = None) -> dict:
         MIN_GRADE = min_grade
 
     market_bull, market_score = get_market_context()
-    sectors = get_top_sectors(top_n=3)
-    tickers, funnel = get_candidate_tickers_from_finviz(sectors)
+    sectors = get_top_sectors(top_n=top_n_sectors, weights=weights)
+    tickers, funnel = get_candidate_tickers_from_finviz(
+        sectors, max_per_sector=max_per_sector, base_filters=base_filters)
 
     if not tickers:
         return {

@@ -21,6 +21,32 @@ SEAN_FILTERS = {
     "Country": "USA",
 }
 
+# Valid Finviz dropdown options for the adjustable Level-1 filters.
+# (exact labels accepted by finvizfinance)
+FILTER_OPTIONS = {
+    "Market Cap.": [
+        "+Small (over $300mln)", "+Mid (over $2bln)",
+        "+Large (over $10bln)", "+Mega (over $200bln)",
+    ],
+    "Price": ["Over $1", "Over $2", "Over $3", "Over $5", "Over $10", "Over $20"],
+    "Average Volume": [
+        "Over 100K", "Over 200K", "Over 500K", "Over 750K", "Over 1M", "Over 2M",
+    ],
+    "Relative Volume": ["Over 0.5", "Over 0.75", "Over 1", "Over 1.5", "Over 2"],
+}
+
+
+def build_filters(market_cap: str = None, price: str = None,
+                  avg_volume: str = None, rel_volume: str = None) -> dict:
+    """Build a Finviz filter dict from chosen options, falling back to defaults."""
+    return {
+        "Market Cap.": market_cap or SEAN_FILTERS["Market Cap."],
+        "Price": price or SEAN_FILTERS["Price"],
+        "Average Volume": avg_volume or SEAN_FILTERS["Average Volume"],
+        "Relative Volume": rel_volume or SEAN_FILTERS["Relative Volume"],
+        "Country": "USA",
+    }
+
 LEADING_SECTOR_FILTERS = {
     "Technology": {**SEAN_FILTERS, "Sector": "Technology"},
     "Healthcare": {**SEAN_FILTERS, "Sector": "Healthcare"},
@@ -72,16 +98,19 @@ def get_ticker_info(ticker: str) -> dict:
     return TICKER_INFO.get(ticker, {"sector": "Unknown", "industry": ""})
 
 
-def get_tickers_from_leading_sectors(top_sectors: list[str], max_per_sector: int = 50) -> list[str]:
+def get_tickers_from_leading_sectors(top_sectors: list[str], max_per_sector: int = 50,
+                                     base_filters: dict = None) -> list[str]:
     """
     For each leading sector, fetch top stocks by relative volume.
     Returns deduplicated list of tickers. Caches sector/industry in TICKER_INFO.
+    base_filters: optional Finviz filter dict (from build_filters); defaults to SEAN_FILTERS.
     """
+    base = base_filters or SEAN_FILTERS
     all_tickers = []
     seen = set()
 
     for sector_name in top_sectors:
-        filters = {**SEAN_FILTERS, "Sector": sector_name}
+        filters = {**base, "Sector": sector_name}
         df = fetch_screener(filters=filters)
         if df.empty:
             continue

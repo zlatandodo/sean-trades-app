@@ -32,12 +32,23 @@ def _normalize_perf_columns(df):
         df["Change"] = pd.to_numeric(df["Change"], errors="coerce")
 
 
-def get_top_sectors(top_n: int = 3) -> list[dict]:
+# Default weights for the composite Relative Strength score (sum = 1.0).
+# Now includes the 1-day term. Single source of truth.
+WEIGHTS = {"1d": 0.10, "1w": 0.35, "1m": 0.35, "3m": 0.20}
+
+
+def _ranked_sectors(weights: dict = None) -> list[dict]:
     """
-    Score sectors by composite performance: 1week(40%) + 1month(35%) + 1quarter(25%).
-    Sean Trades: look for sectors leading over last day, week, and month.
-    Returns top N sectors sorted by composite score.
+    Fetch all sectors and rank them by the composite Relative Strength score:
+
+        score = perf_1d*w1d + perf_1w*w1w + perf_1m*w1m + perf_3m*w3m
+
+    weights: dict with keys '1d','1w','1m','3m'. Missing keys default to 0.
+    Returns the full list sorted by score descending; each item has
+    {sector, perf_1d, perf_1w, perf_1m, perf_3m, score}.
     """
+    w = {**WEIGHTS, **(weights or {})}
+
     try:
         perf = Performance()
         df = perf.screener_view(group="Sector")
@@ -50,59 +61,12 @@ def get_top_sectors(top_n: int = 3) -> list[dict]:
 
     _normalize_perf_columns(df)
 
-    # Composite score: week(40%) + month(35%) + quarter(25%)
+    z = pd.Series(0, index=df.index)
     df["score"] = (
-        df.get("Perf Week", pd.Series(0, index=df.index)).fillna(0) * 0.40 +
-        df.get("Perf Month", pd.Series(0, index=df.index)).fillna(0) * 0.35 +
-        df.get("Perf Quart", pd.Series(0, index=df.index)).fillna(0) * 0.25
-    )
-
-    df_sorted = df.sort_values("score", ascending=False)
-    top = df_sorted.head(top_n)
-
-    result = []
-    for _, row in top.iterrows():
-        result.append({
-            "sector": row.get("Name", ""),
-            "score": round(float(row["score"]), 4),
-            "perf_1w": round(float(row.get("Perf Week", 0) or 0), 4),
-            "perf_1m": round(float(row.get("Perf Month", 0) or 0), 4),
-            "perf_3m": round(float(row.get("Perf Quart", 0) or 0), 4),
-            "perf_1d": round(float(row.get("Change", 0) or 0), 4),
-        })
-
-    return result
-
-
-# Weights used for the composite Relative Strength score (single source of truth)
-WEIGHTS = {"1w": 0.40, "1m": 0.35, "3m": 0.25}
-
-
-def get_all_sectors_ranked() -> list[dict]:
-    """
-    Return ALL Finviz sectors with the full breakdown used by the
-    composite Relative Strength score, sorted by score descending.
-
-    score = perf_1w*0.40 + perf_1m*0.35 + perf_3m*0.25
-
-    Each item: {sector, perf_1d, perf_1w, perf_1m, perf_3m, score}.
-    """
-    try:
-        perf = Performance()
-        df = perf.screener_view(group="Sector")
-    except Exception as e:
-        print(f"[ERROR] Finviz sector fetch failed: {e}", file=sys.stderr)
-        return []
-
-    if df is None or df.empty:
-        return []
-
-    _normalize_perf_columns(df)
-
-    df["score"] = (
-        df.get("Perf Week", pd.Series(0, index=df.index)).fillna(0) * WEIGHTS["1w"] +
-        df.get("Perf Month", pd.Series(0, index=df.index)).fillna(0) * WEIGHTS["1m"] +
-        df.get("Perf Quart", pd.Series(0, index=df.index)).fillna(0) * WEIGHTS["3m"]
+        df.get("Change", z).fillna(0) * w.get("1d", 0) +
+        df.get("Perf Week", z).fillna(0) * w.get("1w", 0) +
+        df.get("Perf Month", z).fillna(0) * w.get("1m", 0) +
+        df.get("Perf Quart", z).fillna(0) * w.get("3m", 0)
     )
 
     df_sorted = df.sort_values("score", ascending=False)
@@ -119,8 +83,19 @@ def get_all_sectors_ranked() -> list[dict]:
     return result
 
 
+def get_top_sectors(top_n: int = 3, weights: dict = None) -> list[dict]:
+    """Top N sectors by composite Relative Strength score (see _ranked_sectors)."""
+    return _ranked_sectors(weights)[:top_n]
+
+
+def get_all_sectors_ranked(weights: dict = None) -> list[dict]:
+    """All sectors ranked by composite Relative Strength score (see _ranked_sectors)."""
+    return _ranked_sectors(weights)
+
+
 if __name__ == "__main__":
     print("Tutti i settori ordinati per Relative Strength score:\n")
     for s in get_all_sectors_ranked():
         print(f"  {s['score']:+.3f}  {s['sector']:24}  "
-              f"1w={s['perf_1w']:+.2%}  1m={s['perf_1m']:+.2%}  3m={s['perf_3m']:+.2%}")
+              f"1d={s['perf_1d']:+.2%}  1w={s['perf_1w']:+.2%}  "
+              f"1m={s['perf_1m']:+.2%}  3m={s['perf_3m']:+.2%}")
