@@ -32,8 +32,8 @@ from tools.stock_screener import build_filters, FILTER_OPTIONS
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Sean Trades Scanner",
-    page_icon="📊",
+    page_title="Dodo Momentum",
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -74,6 +74,36 @@ def run_full_scan(min_grade: str, weights_key: tuple, top_n: int,
 def load_all_sectors(weights_key: tuple):
     """All sectors with the full Relative Strength breakdown. Cached 1h."""
     return get_all_sectors_ranked(dict(weights_key))
+
+
+def tradingview_url(ticker: str) -> str:
+    """Public TradingView symbol page for a ticker."""
+    return f"https://www.tradingview.com/symbols/{ticker}/"
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_business_description(ticker: str, max_len: int = 240) -> str:
+    """
+    Short business description for a ticker (from Yahoo Finance).
+    Truncated to ~max_len chars at a sentence/word boundary. Cached 24h.
+    """
+    try:
+        info = yf.Ticker(ticker).info
+        summary = (info or {}).get("longBusinessSummary", "") or ""
+    except Exception:
+        summary = ""
+    summary = summary.strip()
+    if not summary:
+        return ""
+    if len(summary) <= max_len:
+        return summary
+    cut = summary[:max_len]
+    # prefer cutting at the last sentence end, else last space
+    dot = cut.rfind(". ")
+    if dot > 60:
+        return cut[:dot + 1]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > 0 else cut).rstrip(",;: ") + "…"
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -139,8 +169,8 @@ def grade_badge(grade: str) -> str:
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
-st.sidebar.title("📊 Sean Trades Scanner")
-st.sidebar.caption('Metodo "Back to Basics" — @SRxTrades')
+st.sidebar.title("🚀 Dodo Momentum")
+st.sidebar.caption('Scanner momentum — metodo "Back to Basics" (@SRxTrades)')
 
 min_grade = st.sidebar.selectbox(
     "Grado minimo", ["A+", "A", "B", "C"], index=2,
@@ -304,11 +334,15 @@ with tab_setups:
             view = view[view["NearBreakout"]]
 
         st.caption(f"{len(view)} setup mostrati")
+        table = view.copy()
+        table["TradingView"] = table["Ticker"].apply(tradingview_url)
         st.dataframe(
-            view[["Ticker", "Sector", "Industry", "Grade", "Score", "Price",
-                  "VolPattern", "Candle", "NearBreakout"]],
+            table[["Ticker", "TradingView", "Sector", "Industry", "Grade", "Score",
+                   "Price", "VolPattern", "Candle", "NearBreakout"]],
             use_container_width=True, hide_index=True,
             column_config={
+                "TradingView": st.column_config.LinkColumn(
+                    "📈 TV", display_text="apri", help="Apri il grafico su TradingView"),
                 "Score": st.column_config.ProgressColumn(
                     "Score", min_value=0, max_value=16, format="%.1f"),
                 "NearBreakout": st.column_config.CheckboxColumn("⚡ BO"),
@@ -337,9 +371,13 @@ with tab_setups:
                 for col, tk in zip(cols, row_tickers):
                     r = view[view["Ticker"] == tk].iloc[0]
                     with col:
-                        st.markdown(f"**{tk}** · {r['Grade']} · {r['Score']}/16 · "
-                                    f"${r['Price']:.2f}" +
-                                    ("  ⚡" if r["NearBreakout"] else ""))
+                        st.markdown(
+                            f"**[{tk}]({tradingview_url(tk)})** · {r['Grade']} · "
+                            f"{r['Score']}/16 · ${r['Price']:.2f}" +
+                            ("  ⚡" if r["NearBreakout"] else ""))
+                        desc = get_business_description(tk)
+                        if desc:
+                            st.caption(f"🏢 {desc}")
                         components.html(tradingview_widget_html(tk, chart_h),
                                         height=chart_h + 10)
 
@@ -352,6 +390,11 @@ with tab_chart:
     else:
         sel = st.selectbox("Seleziona ticker", df["Ticker"].tolist())
         row = df[df["Ticker"] == sel].iloc[0]
+
+        st.markdown(f"### [{sel}]({tradingview_url(sel)})  ·  {row['Sector']}")
+        desc = get_business_description(sel)
+        if desc:
+            st.caption(f"🏢 {desc}")
 
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Grade", row["Grade"])
