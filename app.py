@@ -32,7 +32,7 @@ from tools.stock_screener import build_filters, FILTER_OPTIONS
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Dodo Momentum",
+    page_title="Sean Scanner",
     page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -169,7 +169,7 @@ def grade_badge(grade: str) -> str:
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
-st.sidebar.title("🚀 Dodo Momentum")
+st.sidebar.title("🚀 Sean Scanner")
 st.sidebar.caption('Scanner momentum — metodo "Back to Basics" (@SRxTrades)')
 
 min_grade = st.sidebar.selectbox(
