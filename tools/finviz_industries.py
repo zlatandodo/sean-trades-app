@@ -7,6 +7,7 @@ import pandas as pd
 import json
 import sys
 from finvizfinance.group.performance import Performance
+from tools.net_utils import with_retries
 
 
 def get_industry_scores() -> dict[str, float]:
@@ -14,13 +15,8 @@ def get_industry_scores() -> dict[str, float]:
     Return a map {industry_name: composite_score} for all ~144 Finviz industries.
     Composite = 1week(40%) + 1month(35%) + 1quarter(25%), same weighting as sectors.
     """
-    try:
-        perf = Performance()
-        df = perf.screener_view(group="Industry")
-    except Exception as e:
-        print(f"[ERROR] Finviz industry fetch failed: {e}", file=sys.stderr)
-        return {}
-
+    df = with_retries(lambda: Performance().screener_view(group="Industry"),
+                      label="Finviz industries")
     if df is None or df.empty:
         return {}
 

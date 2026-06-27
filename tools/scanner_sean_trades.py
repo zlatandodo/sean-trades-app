@@ -37,6 +37,7 @@ from tools.stock_screener import (
     get_all_candidate_tickers, get_tickers_from_leading_sectors, get_ticker_info
 )
 from tools.technical_analysis import analyze_stock, get_market_trend, SetupScore
+from tools.net_utils import with_retries
 
 # ── Config ──────────────────────────────────────────────────────────────────
 MIN_GRADE = "B"          # Minimum grade to include in report
@@ -53,8 +54,17 @@ def get_market_context() -> tuple[bool, float]:
     """Download SPY and QQQ and assess market trend."""
     print("📊 Checking market context (SPY/QQQ)...")
     try:
-        spy = yf.download("SPY", period="3mo", interval="1d", progress=False, auto_adjust=True)
-        qqq = yf.download("QQQ", period="3mo", interval="1d", progress=False, auto_adjust=True)
+        spy = with_retries(
+            lambda: yf.download("SPY", period="3mo", interval="1d",
+                                progress=False, auto_adjust=True),
+            label="Yahoo SPY")
+        qqq = with_retries(
+            lambda: yf.download("QQQ", period="3mo", interval="1d",
+                                progress=False, auto_adjust=True),
+            label="Yahoo QQQ")
+        if spy is None or qqq is None or spy.empty or qqq.empty:
+            print("   [WARN] Market data unavailable (rate limited)")
+            return True, 1.0
 
         if isinstance(spy.columns, pd.MultiIndex):
             spy.columns = [c[0] for c in spy.columns]
@@ -322,10 +332,12 @@ def run_scan(min_grade: str = None, weights: dict = None, top_n_sectors: int = 3
         sectors, max_per_sector=max_per_sector, base_filters=base_filters)
 
     if not tickers:
+        # No candidates: almost always a data-source outage (Finviz/Yahoo rate limit)
         return {
             "market_bull": market_bull, "market_score": market_score,
             "sectors": sectors, "funnel": funnel,
             "results": [], "all_results": [], "csv_path": None,
+            "data_ok": False,
         }
 
     all_results = analyze_batch(tickers, market_score)
@@ -334,7 +346,7 @@ def run_scan(min_grade: str = None, weights: dict = None, top_n_sectors: int = 3
 
     return {
         "market_bull": market_bull, "market_score": market_score,
-        "sectors": sectors, "funnel": funnel,
+        "sectors": sectors, "funnel": funnel, "data_ok": True,
         "results": ranked, "all_results": all_results, "csv_path": csv_path,
     }
 

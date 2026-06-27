@@ -11,6 +11,7 @@ import pandas as pd
 import sys
 from finvizfinance.screener.overview import Overview
 from finvizfinance.screener.performance import Performance as PerfScreener
+from tools.net_utils import with_retries
 
 
 SEAN_FILTERS = {
@@ -64,14 +65,13 @@ def fetch_screener(filters: dict = None, order_by: str = "Relative Volume") -> p
     Fetch stocks from Finviz screener with given filters.
     Returns DataFrame with ticker, price, volume, sector, industry.
     """
-    try:
+    def _fetch():
         screener = Overview()
         screener.set_filter(filters_dict=filters or SEAN_FILTERS)
-        df = screener.screener_view(order=order_by, ascend=False, verbose=0)
-        return df if df is not None else pd.DataFrame()
-    except Exception as e:
-        print(f"[ERROR] Screener fetch failed: {e}", file=sys.stderr)
-        return pd.DataFrame()
+        return screener.screener_view(order=order_by, ascend=False, verbose=0)
+
+    df = with_retries(_fetch, label="Finviz screener")
+    return df if df is not None else pd.DataFrame()
 
 
 # Module-level map: ticker -> {"sector": str, "industry": str}

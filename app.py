@@ -229,6 +229,15 @@ market_bull = scan["market_bull"]
 sectors = scan["sectors"]
 funnel = scan["funnel"]
 
+# Rate-limit / data-source outage banner (not a "no setups" situation)
+if not scan.get("data_ok", True):
+    st.error(
+        "⚠️ **Dati di mercato non disponibili adesso** (Finviz/Yahoo Finance stanno "
+        "limitando le richieste — *rate limit*). Non è un errore dell'app.\n\n"
+        "Attendi ~10-15 minuti e premi **🔄 Esegui nuovo scan** nella sidebar. "
+        "Evita di rilanciare ripetutamente nel frattempo."
+    )
+
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 tab_overview, tab_setups, tab_chart, tab_history = st.tabs(

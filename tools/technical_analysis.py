@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional
+from tools.net_utils import with_retries
 
 
 @dataclass
@@ -380,7 +381,10 @@ def analyze_stock(ticker: str, market_score: float,
     Returns SetupScore or None if data is unavailable.
     """
     try:
-        data = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=True)
+        data = with_retries(
+            lambda: yf.download(ticker, period="6mo", interval="1d",
+                                progress=False, auto_adjust=True),
+            attempts=3, base_delay=1.5, label=f"Yahoo {ticker}")
         if data is None or len(data) < 30:
             return None
 

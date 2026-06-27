@@ -7,6 +7,7 @@ import pandas as pd
 import json
 import sys
 from finvizfinance.group.performance import Performance
+from tools.net_utils import with_retries
 
 
 def _normalize_perf_columns(df):
@@ -49,13 +50,8 @@ def _ranked_sectors(weights: dict = None) -> list[dict]:
     """
     w = {**WEIGHTS, **(weights or {})}
 
-    try:
-        perf = Performance()
-        df = perf.screener_view(group="Sector")
-    except Exception as e:
-        print(f"[ERROR] Finviz sector fetch failed: {e}", file=sys.stderr)
-        return []
-
+    df = with_retries(lambda: Performance().screener_view(group="Sector"),
+                      label="Finviz sectors")
     if df is None or df.empty:
         return []
 
